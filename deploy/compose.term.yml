@@ -1,0 +1,6 @@
+# Optional compose extension for terminal gateway runtime (mounting host tmux socket and workspace)
+services:
+  app:
+    volumes:
+      - ${TMUX_SOCKET_DIR:-/tmp/tmux-1000}:/tmp/tmux-1000
+      - ${HOST_WORKSPACE:-/tmp}:${HOST_WORKSPACE:-/tmp}

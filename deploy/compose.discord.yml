@@ -1,0 +1,9 @@
+# Compose extension for Discord gateway runtime (bridge network, configurable DNS, and SYS_ADMIN capability)
+services:
+  app:
+    network_mode: "bridge"
+    cap_add:
+      - SYS_ADMIN
+    dns:
+      - ${DNS_SERVER_1:-223.5.5.5}
+      - ${DNS_SERVER_2:-8.8.8.8}

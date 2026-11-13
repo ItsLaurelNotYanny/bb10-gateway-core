@@ -1,0 +1,13 @@
+.git
+.venv
+.local-docs
+private
+tests
+certs
+data
+__pycache__
+.pytest_cache
+.ruff_cache
+icons_preview
+review-issue.md
+*.tar.gz

@@ -1,0 +1,36 @@
+# Generic template: one container per app. All values come from an env file:
+#   docker compose --env-file private/apps/<app>.env up -d
+# Required: COMPOSE_PROJECT_NAME, PRESET, PORT, PROFILE_VOLUME, CERTS_DIR
+# Optional: IMAGE, PROFILE_EXTERNAL, PROFILE_TARGET_PATH, TOKEN_FILE, MEM_LIMIT, TZ,
+#           UPSTREAM_HOST, PRESETS_DIR, TARGET_URL, WIN_W, WIN_H, JPEG_QUALITY, ICON_STYLE
+#           (empty = keep preset value; PROFILE_TARGET_PATH defaults to /data/profile)
+# PRESETS_DIR is the HOST path mounted at /app/presets.d (never forwarded as env).
+services:
+  app:
+    image: ${IMAGE:-bb10-gateway-core:latest}
+    container_name: ${COMPOSE_PROJECT_NAME:?set COMPOSE_PROJECT_NAME}
+    restart: unless-stopped
+    shm_size: "1gb"
+    mem_limit: ${MEM_LIMIT:-0}
+    ports:
+      - "${PORT:?set PORT}:${PORT}"
+    environment:
+      - PRESET=${PRESET:?set PRESET}
+      - PORT=${PORT}
+      - TZ=${TZ:-UTC}
+      - UPSTREAM_HOST=${UPSTREAM_HOST:-}
+      - TARGET_URL=${TARGET_URL:-}
+      - WIN_W=${WIN_W:-}
+      - WIN_H=${WIN_H:-}
+      - JPEG_QUALITY=${JPEG_QUALITY:-}
+      - ICON_STYLE=${ICON_STYLE:-}
+    volumes:
+      - profile:${PROFILE_TARGET_PATH:-/data/profile}
+      - ${CERTS_DIR:?set CERTS_DIR}:/certs:ro
+      - ${TOKEN_FILE:-./token.txt}:/data/token.txt:ro
+      - ${PRESETS_DIR:-./presets.d}:/app/presets.d:ro
+
+volumes:
+  profile:
+    name: ${PROFILE_VOLUME:?set PROFILE_VOLUME}
+    external: ${PROFILE_EXTERNAL:-false}

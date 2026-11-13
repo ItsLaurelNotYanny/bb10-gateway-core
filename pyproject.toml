@@ -1,0 +1,21 @@
+[project]
+name = "bb10-gateway-core"
+version = "1.0.0"
+description = "Unified zero-trust gateway platform, ES5 display compositor, and L4 relay for BlackBerry 10"
+requires-python = ">=3.11"
+dependencies = [
+    "aiohttp>=3.9",
+    "pillow>=10.0",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = [".venv", "certs", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests", "private/tests"]

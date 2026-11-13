@@ -1,0 +1,17 @@
+# Minimal template: copy to presets.d/<name>.toml and edit.
+# Any preset may set base = "<other preset>" and override only some fields.
+name = "example"
+title = "Example App (BB10 Gateway)"
+short_title = "Example"
+runtime = "chromium"
+target_url = "https://example.com/"
+port = 2443
+win_w = 720
+win_h = 720
+layout = "direct"
+rail_w = 0
+default_chat_x = 0
+send_keys = ["Return"]
+paste_keys = ["ctrl+v"]
+passthrough_keys = ["BackSpace", "Escape", "Return", "Tab"]
+cookie_name = "bb10_example_auth"

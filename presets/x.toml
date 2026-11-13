@@ -1,0 +1,21 @@
+# Example: Chromium app with a direct layout
+name = "x"
+title = "X (BB10 Gateway)"
+short_title = "X"
+runtime = "chromium"
+target_url = "https://x.com/home"
+port = 2444
+win_w = 720
+win_h = 720
+layout = "direct"
+rail_w = 0
+default_chat_x = 0
+send_keys = ["ctrl+Return"]
+cookie_name = "bb10_x_auth"
+passthrough_keys = ["BackSpace", "End", "Escape", "Home", "Page_Down", "Page_Up", "Return", "Tab", "g", "h", "j", "k", "l", "m", "n", "r", "slash", "space", "u", "x"]
+paste_keys = ["ctrl+v"]
+default_type_mode = false
+enable_term_bar = false
+lock_win_h = false
+jpeg_quality = 85
+icon_style = "slate"

@@ -1,0 +1,19 @@
+[Unit]
+Description=Stateless TCP Relay Instance for %I (BB10 Gateway Ecosystem)
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/tcp-relay/%i.env
+ExecStart=/usr/local/bin/emailproxy-tcp-relay.py
+Restart=always
+RestartSec=3
+DynamicUser=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

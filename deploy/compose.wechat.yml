@@ -1,0 +1,10 @@
+# Compose extension for WeChat gateway runtime (bridge network, unconfined seccomp, fixed hostname, and configurable DNS)
+services:
+  app:
+    network_mode: "bridge"
+    hostname: ${WECHAT_HOSTNAME:?WECHAT_HOSTNAME is required}
+    security_opt:
+      - seccomp:unconfined
+    dns:
+      - ${DNS_SERVER_1:-223.5.5.5}
+      - ${DNS_SERVER_2:-8.8.8.8}
