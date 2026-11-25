@@ -55,6 +55,7 @@ class Preset:
     jpeg_quality: int = 85
     icon_style: str = "slate"
     upstream_host: str = ""
+    hidpi: bool = False
 
 
 VALID_RUNTIMES = ("chromium", "xterm", "native_gui")
@@ -96,7 +97,7 @@ def _read_toml_dir(directory: Path) -> dict[str, dict[str, Any]]:
 
 
 _INT_FIELDS = ("port", "win_w", "win_h", "rail_w", "default_chat_x")
-_BOOL_FIELDS = ("default_type_mode", "enable_term_bar", "lock_win_h")
+_BOOL_FIELDS = ("default_type_mode", "enable_term_bar", "lock_win_h", "hidpi")
 _STR_FIELDS = ("name", "title", "short_title", "target_url", "cookie_name", "upstream_host")
 
 
@@ -281,6 +282,13 @@ def load_preset(
         icon_style = preset.icon_style
 
     upstream_host = source_env.get("UPSTREAM_HOST", "").strip() or preset.upstream_host
+    hidpi_raw = source_env.get("HIDPI", "").strip().lower()
+    if hidpi_raw in ("1", "true", "yes", "on"):
+        hidpi = True
+    elif hidpi_raw in ("0", "false", "no", "off"):
+        hidpi = False
+    else:
+        hidpi = preset.hidpi
 
     return replace(
         preset,
@@ -291,4 +299,10 @@ def load_preset(
         win_h=win_h,
         jpeg_quality=jpeg_quality,
         icon_style=icon_style,
+        hidpi=hidpi,
     )
+
+
+def preset_scale(preset: Preset) -> int:
+    """Return integer HiDPI display scale factor (2 when hidpi is enabled, else 1)."""
+    return 2 if preset.hidpi else 1

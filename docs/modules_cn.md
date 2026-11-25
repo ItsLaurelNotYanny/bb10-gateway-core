@@ -1,5 +1,7 @@
 # 网关架构与核心模块内部实现
 
+[English](modules.md)
+
 本文档详细说明 `bb10-gateway-core` 核心架构与各模块的技术实现细节。
 
 ---
@@ -42,6 +44,12 @@
 1. **清理残留锁文件**：自动清除容器异常退出遗留的 X11 套接字锁 (`/tmp/.X99-lock`、`/tmp/.X11-unix/X99`) 以及 Chromium `Singleton*` 单例锁。
 2. **共享内存分配**：为 `/dev/shm` 分配 `1gb` 空间，防止复杂网页渲染时 Chromium IPC 崩溃。
 3. **看门狗循环**：顺序拉起 `Xvfb :99`、窗口管理器 (`openbox`)、虚拟输入守护进程 (`xdotool`) 和目标运行时，后台常驻进程定时巡检并在异常时自愈拉起。
+4. **无显卡环境 GPU 防护 (`--disable-gpu`)**：
+   - **改动原因**：此前 Chromium 启用了 `--use-gl=angle --use-angle=gl-egl --ignore-gpu-blocklist`，在没有硬件 GPU 的无头 NAS 上会回退为软件 ANGLE/SwiftShader 光栅化，导致 `chromium --type=gpu-process` 在双核 NAS 上持续占满 150%+ CPU 并拖慢同机其他容器。
+   - **实现方式**：`entrypoint.sh` 改为显式传入 `--disable-gpu`（禁用 GL 与 GPU 合成），消除软件 GPU 空转。
+5. **进程内空闲自动挂起 (`gateway.py` 中的 `IdleSleepController`)**：
+   - **改动原因**：即便禁用 GPU，Discord/X 等网页应用在无人访问时仍会持续执行后台 JS/DOM 轮询消耗 CPU；而引入外部容器休眠编排器会带来冷启动延迟与 NAS 异常停止误报。
+   - **实现机制**：由环境变量 `IDLE_SLEEP_SECONDS` 控制（`chromium` 运行时默认 `30s`，设为 `0` 可关闭）。当所有 WebSocket 客户端断开或锁屏暂停超过阈值后，`gateway.py` 向 `/usr/lib/chromium/chromium` 进程发送 `SIGSTOP` 冻结，使空闲 CPU 降至接近 0 且保留完整内存会话；下次收到已认证的 `GET /` 或 `/ws` 恢复请求时立即发送 `SIGCONT` 毫秒级唤醒。
 
 ---
 

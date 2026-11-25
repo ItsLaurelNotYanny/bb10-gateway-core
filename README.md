@@ -1,5 +1,7 @@
 # bb10-gateway-core
 
+[简体中文](README_cn.md)
+
 > Keep your BlackBerry Passport useful: run apps on your NAS, use the BBP's built-in browser as the screen and keyboard. **Zero install on the device.**
 
 ![demo](docs/demo.gif)
@@ -34,7 +36,7 @@ BB10 is end-of-life and its app ecosystem is gone, but the Passport's square scr
 | **Display Base** | 720×720 double-buffered canvas, dirty-rect JPEG streaming, auto-pause on screen lock (0 B/s asleep) |
 | **Dual-Track Input** | Built for the BB10 keyboard: top-anchored input drawer (avoids IME occlusion), Type/Nav modes, number bar, optional Ctrl/Alt bar |
 | **Zero-Trust Auth** | Constant-time token verification, 90-day HttpOnly cookie, LAN TLS 1.2+ with your own Root CA |
-| **Sandbox & Watchdog** | Stale lock cleanup (`/tmp/.X99-lock`, Chromium singleton locks), process auto-heal, unattended operation |
+| **Sandbox & Watchdog** | Stale lock cleanup (`/tmp/.X99-lock`, Chromium singleton locks), `--disable-gpu`, idle Chromium `SIGSTOP`/`SIGCONT` auto-sleep (`IDLE_SLEEP_SECONDS`, default 30s), process auto-heal |
 | **Media & Clipboard** | Photo/file upload from BBP to server clipboard; one-tap sync of server X11 clipboard back to the phone |
 | **VPS Relay** *(optional)* | Hardened L4 relay with TLS first-packet shield (`0x16 0x03`) and per-IP rate limiting; your NAS stays unexposed |
 

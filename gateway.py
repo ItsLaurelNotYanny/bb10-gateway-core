@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import secrets
+import signal
 import ssl
 import struct
 import subprocess
@@ -23,7 +24,7 @@ from aiohttp import WSMsgType, web
 from PIL import Image, ImageChops, ImageGrab, UnidentifiedImageError
 
 from icon_gen import generate_icon_bytes
-from presets import Preset, load_preset
+from presets import Preset, load_preset, preset_scale
 
 LOG = logging.getLogger("bb10_gateway")
 
@@ -35,6 +36,7 @@ DIRTY_FULL_THRESHOLD = 0.40
 MIN_WIN_H = 420
 MAX_WIN_H = 1080
 DEFAULT_WIN_H = 720
+DEFAULT_IDLE_SLEEP_SECONDS = 30.0
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 TYPE_MODE_KEYS = frozenset({"Return", "BackSpace", "Tab", "Escape", "space"})
 SAFE_TERMINAL_KEYS = frozenset(
@@ -133,10 +135,10 @@ def _safe_int(val: Any, default: int = 0) -> int:
         return default
 
 
-def clamp_win_h(h: int | float | str | None, default: int = DEFAULT_WIN_H) -> int:
-    """Clamp dynamic client viewport height into [420, 1080]."""
+def clamp_win_h(h: int | float | str | None, default: int = DEFAULT_WIN_H, scale: int = 1) -> int:
+    """Clamp dynamic client viewport height into [420 * scale, 1080 * scale]."""
     val = _safe_int(h, default=int(default))
-    return max(MIN_WIN_H, min(MAX_WIN_H, val))
+    return max(MIN_WIN_H * scale, min(MAX_WIN_H * scale, val))
 
 
 def _encode_jpeg(img: Image.Image, quality: int) -> bytes:
@@ -173,37 +175,53 @@ def encode_dirty_frame(
     return header + jpeg_bytes
 
 
-def detect_chat_x(im: Image.Image, default_x: int = 375) -> int:
+def detect_chat_x(im: Image.Image, default_x: int = 375, scale: int = 1) -> int:
     """Locate vertical sidebar/chat split in Discord's slim_rail layout."""
     w, h = im.size
-    if w <= max(default_x, 260) or h < 40:
+    if w <= max(default_x, 260 * scale) or h < 40 * scale:
         return default_x
 
     rgb = im.convert("RGB") if im.mode != "RGB" else im
-    sample_ys = (h // 4, h // 2, (3 * h) // 4)
-    lo_x = 240
-    hi_x = min(460, w - 2)
+    sample_ys = tuple(int(h * f) for f in (0.15, 0.30, 0.45, 0.60, 0.75, 0.90))
+    lo_x = max(240 * scale, default_x - 65 * scale)
+    hi_x = min(default_x + 65 * scale, w - 2)
     best_x = default_x
     best_score = 0
 
     for x in range(lo_x, hi_x):
-        score = 0
+        diffs = []
+        left_px = []
         for y in sample_ys:
-            r1, g1, b1 = rgb.getpixel((x - 1, y))
-            r2, g2, b2 = rgb.getpixel((x, y))
-            score += abs(r2 - r1) + abs(g2 - g1) + abs(b2 - b1)
-        if score > best_score:
-            best_score = score
-            best_x = x
+            p1 = rgb.getpixel((x - 1, y))
+            p2 = rgb.getpixel((x, y))
+            left_px.append(p1)
+            diffs.append(abs(p2[0] - p1[0]) + abs(p2[1] - p1[1]) + abs(p2[2] - p1[2]))
+        # True column boundary must consistently change contrast and have a uniform left border
+        if sum(1 for d in diffs if d >= 8) >= 5:
+            uniform = max(
+                sum(
+                    1
+                    for p in left_px
+                    if abs(p[0] - ref[0]) + abs(p[1] - ref[1]) + abs(p[2] - ref[2]) <= 12
+                )
+                for ref in left_px[:2]
+            )
+            if uniform >= 5:
+                score = sum(diffs)
+                if score > best_score:
+                    best_score = score
+                    best_x = x
 
-    return best_x if best_score >= 36 else default_x
+    return best_x if best_score >= 40 else default_x
 
 
 def resolve_chat_x(im: Image.Image, preset: Preset) -> int:
-    """Compute chat_x only when preset.layout == 'slim_rail'."""
+    """Compute chat_x in physical pixels only when preset.layout == 'slim_rail'."""
+    scale = preset_scale(preset)
+    default_phys = preset.default_chat_x * scale
     if preset.layout != "slim_rail":
-        return preset.default_chat_x
-    return detect_chat_x(im, preset.default_chat_x)
+        return default_phys
+    return detect_chat_x(im, default_phys, scale=scale)
 
 
 @dataclass
@@ -218,9 +236,19 @@ class StreamSession:
     resized_once: bool = False
     wake_event: asyncio.Event = field(default_factory=asyncio.Event)
 
+    @property
+    def scale(self) -> int:
+        return preset_scale(self.preset)
+
+    @property
+    def phys_w(self) -> int:
+        return self.preset.win_w * self.scale
+
     def __post_init__(self) -> None:
-        self.win_h = clamp_win_h(self.win_h)
-        self.chat_x = self.preset.default_chat_x
+        self.win_h = clamp_win_h(
+            self.win_h, default=self.preset.win_h * self.scale, scale=self.scale
+        )
+        self.chat_x = self.preset.default_chat_x * self.scale
 
     def set_paused(self, paused: bool) -> bool:
         """Update pause state; returns True when resuming to trigger immediate check."""
@@ -294,6 +322,131 @@ def resolve_upload_dir() -> Path:
             continue
     fallback = Path("/tmp")
     return fallback
+
+
+def resolve_idle_sleep_seconds(
+    preset: Preset,
+    env: Mapping[str, str] | None = None,
+) -> float:
+    """Resolve idle auto-sleep timeout in seconds; 0 disables auto-sleep."""
+    source_env = os.environ if env is None else env
+    raw = source_env.get("IDLE_SLEEP_SECONDS", "").strip()
+    if raw:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            LOG.warning("Invalid IDLE_SLEEP_SECONDS=%r; falling back to default", raw)
+    return DEFAULT_IDLE_SLEEP_SECONDS if preset.runtime == "chromium" else 0.0
+
+
+def _signal_chromium_processes(sig: int) -> int:
+    """Send a signal (e.g. SIGSTOP/SIGCONT) to Chromium processes via /proc."""
+    proc_root = Path("/proc")
+    if not proc_root.is_dir():
+        return 0
+    signaled = 0
+    self_pid = os.getpid()
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if pid == self_pid:
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if b"/usr/lib/chromium/chromium" in cmdline:
+            try:
+                os.kill(pid, sig)
+                signaled += 1
+            except OSError:
+                continue
+    return signaled
+
+
+class IdleSleepController:
+    """Suspend managed app processes when no unpaused WebSocket clients are active."""
+
+    def __init__(
+        self,
+        *,
+        idle_seconds: float,
+        suspend_fn: Callable[[], Awaitable[None]],
+        resume_fn: Callable[[], Awaitable[None]],
+    ) -> None:
+        self.idle_seconds = max(0.0, float(idle_seconds))
+        self._suspend_fn = suspend_fn
+        self._resume_fn = resume_fn
+        self._sessions: dict[int, StreamSession] = {}
+        self._sleep_task: asyncio.Task[None] | None = None
+        self.sleeping = False
+
+    def has_active_clients(self) -> bool:
+        """Return True if at least one connected client is not paused."""
+        return any(not s.paused for s in self._sessions.values())
+
+    def _cancel_timer(self) -> None:
+        if self._sleep_task is not None and not self._sleep_task.done():
+            self._sleep_task.cancel()
+        self._sleep_task = None
+
+    def _schedule_sleep_if_idle(self) -> None:
+        if self.idle_seconds <= 0 or self.sleeping or self.has_active_clients():
+            return
+        if self._sleep_task is not None and not self._sleep_task.done():
+            return
+
+        async def _wait_and_sleep() -> None:
+            try:
+                await asyncio.sleep(self.idle_seconds)
+                if not self.has_active_clients() and not self.sleeping:
+                    self.sleeping = True
+                    LOG.info("No active clients for %.1fs; suspending app", self.idle_seconds)
+                    await self._suspend_fn()
+            except asyncio.CancelledError:
+                return
+
+        self._sleep_task = asyncio.create_task(_wait_and_sleep())
+
+    def start(self) -> None:
+        """Start initial idle countdown if no clients are active."""
+        self._schedule_sleep_if_idle()
+
+    async def wake(self) -> None:
+        """Cancel pending sleep and resume app processes if currently suspended."""
+        self._cancel_timer()
+        if self.sleeping:
+            self.sleeping = False
+            LOG.info("Client activity detected; resuming app")
+            await self._resume_fn()
+        if not self.has_active_clients():
+            self._schedule_sleep_if_idle()
+
+    async def register_session(self, session: StreamSession) -> None:
+        """Register a connected WebSocket session and wake the app."""
+        self._sessions[id(session)] = session
+        await self.wake()
+
+    def unregister_session(self, session: StreamSession) -> None:
+        """Unregister a disconnected WebSocket session and schedule sleep if idle."""
+        self._sessions.pop(id(session), None)
+        if not self.has_active_clients():
+            self._schedule_sleep_if_idle()
+
+    async def on_pause_changed(self) -> None:
+        """React to a session pause/resume state change."""
+        if self.has_active_clients():
+            await self.wake()
+        else:
+            self._schedule_sleep_if_idle()
+
+    async def shutdown(self) -> None:
+        """Cancel pending sleep timer and ensure app processes are resumed on exit."""
+        self._cancel_timer()
+        if self.sleeping:
+            self.sleeping = False
+            await self._resume_fn()
 
 
 async def _run_cmd(*args: str, stdin_bytes: bytes | None = None, timeout: float = 5.0) -> None:
@@ -446,7 +599,7 @@ async def x11_capture_screen(win_w: int, win_h: int) -> Image.Image:
 async def x11_resize_window(win_w: int, win_h: int) -> None:
     """Resize and focus visible window on X11 display using xdotool with fallback to wmctrl."""
     try:
-        await _run_cmd(
+        proc = await asyncio.create_subprocess_exec(
             "xdotool",
             "search",
             "--onlyvisible",
@@ -459,7 +612,12 @@ async def x11_resize_window(win_w: int, win_h: int) -> None:
             str(win_w),
             str(win_h),
             "windowfocus",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
+        rc = await asyncio.wait_for(proc.wait(), timeout=5.0)
+        if rc != 0:
+            await _run_cmd("wmctrl", "-r", ":ACTIVE:", "-e", f"0,0,0,{win_w},{win_h}")
     except Exception:
         await _run_cmd("wmctrl", "-r", ":ACTIVE:", "-e", f"0,0,0,{win_w},{win_h}")
 
@@ -469,6 +627,10 @@ async def handle_index(request: web.Request) -> web.Response:
     token: str = request.app["token"]
     if not check_auth(request, token, preset.cookie_name):
         return web.Response(status=401, text="Unauthorized\n")
+
+    idle_ctrl: IdleSleepController | None = request.app.get("idle_ctrl")
+    if idle_ctrl is not None:
+        await idle_ctrl.wake()
 
     try:
         from client_html import render_client_html
@@ -570,6 +732,9 @@ async def _dispatch_ws_msg(
 
     if msg_type == "pause":
         session.set_paused(bool(data.get("paused", False)))
+        idle_ctrl: IdleSleepController | None = app.get("idle_ctrl")
+        if idle_ctrl is not None:
+            await idle_ctrl.on_pause_changed()
         return
 
     if msg_type == "refresh":
@@ -578,18 +743,22 @@ async def _dispatch_ws_msg(
 
     if msg_type == "resize":
         if preset.lock_win_h:
-            new_h = preset.win_h
+            new_h = preset.win_h * session.scale
         else:
-            new_h = clamp_win_h(data.get("win_h", data.get("h")), default=session.win_h)
+            new_h = clamp_win_h(
+                data.get("win_h", data.get("h")),
+                default=session.win_h,
+                scale=session.scale,
+            )
         if new_h != session.win_h or not session.resized_once:
             session.win_h = new_h
             session.resized_once = True
-            await app["resize_fn"](preset.win_w, new_h)
+            await app["resize_fn"](session.phys_w, new_h)
         session.request_full_frame()
         return
 
     if msg_type == "click":
-        x = max(0, min(preset.win_w - 1, _safe_int(data.get("x"), 0)))
+        x = max(0, min(session.phys_w - 1, _safe_int(data.get("x"), 0)))
         y = max(0, min(session.win_h - 1, _safe_int(data.get("y"), 0)))
         btn = _safe_int(data.get("button"), 1)
         if btn in (1, 2, 3):
@@ -598,7 +767,7 @@ async def _dispatch_ws_msg(
         return
 
     if msg_type == "wheel":
-        x = max(0, min(preset.win_w - 1, _safe_int(data.get("x"), preset.win_w // 2)))
+        x = max(0, min(session.phys_w - 1, _safe_int(data.get("x"), session.phys_w // 2)))
         y = max(0, min(session.win_h - 1, _safe_int(data.get("y"), session.win_h // 2)))
         dy = _safe_int(data.get("dy"), 120)
         btn = "5" if dy > 0 else "4"
@@ -620,7 +789,7 @@ async def _dispatch_ws_msg(
             key_sym = "shift+KP_Add" if direction == "up" else "shift+KP_Subtract"
             await app["key_fn"](key_sym)
             await asyncio.sleep(0.05)
-            await app["resize_fn"](preset.win_w, session.win_h)
+            await app["resize_fn"](session.phys_w, session.win_h)
             session.request_full_frame()
         return
 
@@ -654,15 +823,27 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     ws = web.WebSocketResponse(heartbeat=25.0, max_msg_size=1024 * 1024)
     await ws.prepare(request)
 
-    init_h = clamp_win_h(request.query.get("h"), default=preset.win_h)
+    scale = preset_scale(preset)
+    if preset.lock_win_h:
+        init_h = preset.win_h * scale
+    else:
+        init_h = clamp_win_h(
+            request.query.get("h"),
+            default=preset.win_h * scale,
+            scale=scale,
+        )
     session = StreamSession(preset=preset, win_h=init_h)
+    idle_ctrl: IdleSleepController | None = request.app.get("idle_ctrl")
+    if idle_ctrl is not None:
+        await idle_ctrl.register_session(session)
+
     await ws.send_json(
         {
             "type": "meta",
-            "win_w": preset.win_w,
+            "win_w": session.phys_w,
             "win_h": session.win_h,
             "chat_x": session.chat_x,
-            "rail_w": preset.rail_w,
+            "rail_w": preset.rail_w * scale,
             "layout": preset.layout,
         }
     )
@@ -679,7 +860,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
 
             try:
                 packet, chat_delta = await session.capture_once(
-                    lambda: capture_base(preset.win_w, session.win_h)
+                    lambda: capture_base(session.phys_w, session.win_h)
                 )
                 if chat_delta is not None and not ws.closed:
                     await ws.send_json({"type": "meta", "chat_x": chat_delta})
@@ -709,6 +890,8 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
             elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                 break
     finally:
+        if idle_ctrl is not None:
+            idle_ctrl.unregister_session(session)
         stream_task.cancel()
         await asyncio.gather(stream_task, return_exceptions=True)
 
@@ -730,10 +913,33 @@ def create_app(
     key_fn: Callable[[str], Awaitable[None]] = x11_send_key,
     type_fn: Callable[[str], Awaitable[None]] = x11_type_text,
     frame_interval: float = 0.20,
+    idle_sleep_seconds: float | None = None,
+    suspend_fn: Callable[[], Awaitable[None]] | None = None,
+    resume_fn: Callable[[], Awaitable[None]] | None = None,
 ) -> web.Application:
     """Build configured aiohttp Application instance."""
     resolved_preset = preset or load_preset()
     resolved_token = token or resolve_token()
+    resolved_idle = (
+        resolve_idle_sleep_seconds(resolved_preset)
+        if idle_sleep_seconds is None
+        else max(0.0, float(idle_sleep_seconds))
+    )
+
+    async def _default_suspend() -> None:
+        if resolved_preset.runtime == "chromium":
+            _signal_chromium_processes(signal.SIGSTOP)
+
+    async def _default_resume() -> None:
+        if resolved_preset.runtime == "chromium":
+            _signal_chromium_processes(signal.SIGCONT)
+
+    idle_ctrl = IdleSleepController(
+        idle_seconds=resolved_idle,
+        suspend_fn=suspend_fn or _default_suspend,
+        resume_fn=resume_fn or _default_resume,
+    )
+
     app = web.Application(client_max_size=MAX_UPLOAD_BYTES + 65536)
     app["preset"] = resolved_preset
     app["token"] = resolved_token
@@ -762,6 +968,16 @@ def create_app(
     app["key_fn"] = key_fn
     app["type_fn"] = type_fn
     app["frame_interval"] = frame_interval
+    app["idle_ctrl"] = idle_ctrl
+
+    async def _on_startup(_app: web.Application) -> None:
+        idle_ctrl.start()
+
+    async def _on_shutdown(_app: web.Application) -> None:
+        await idle_ctrl.shutdown()
+
+    app.on_startup.append(_on_startup)
+    app.on_shutdown.append(_on_shutdown)
     app.router.add_get("/", handle_index)
     app.router.add_get("/healthz", handle_healthz)
     app.router.add_get("/icon.png", handle_icon)

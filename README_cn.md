@@ -1,5 +1,7 @@
 # bb10-gateway-core
 
+[English](README.md)
+
 > 让 BlackBerry Passport 继续有用：业务跑在你的 NAS 上，BBP 只负责显示和输入。**设备端零安装。**
 
 ![demo](docs/demo.gif)
@@ -34,7 +36,7 @@ BB10 系统与应用生态已经停摆，但 Passport 的 1:1 方屏 (1440×1440
 | **显示基座** | 720×720 双缓冲 Canvas 绘制，脏矩形 JPEG 图像流传输，锁屏自动暂停（休眠状态 0 B/s） |
 | **双轨输入** | 专为 BB10 键盘打造：顶部锚定输入抽屉（防软键盘遮挡），Type/Nav 模式，数字条，可选 Ctrl/Alt 栏 |
 | **零信任认证** | 防时序攻击恒定时间令牌校验，90 天 HttpOnly 安全 Cookie，内网 TLS 1.2+ 与私有自建 Root CA |
-| **沙箱与看门狗** | 启动前清理残留锁（`/tmp/.X99-lock`，Chromium 单例锁），进程异常自愈，无人值守稳定运行 |
+| **沙箱与看门狗** | 启动前清理残留锁（`/tmp/.X99-lock`，Chromium 单例锁），无显卡 `--disable-gpu` 防护，空闲 Chromium `SIGSTOP`/`SIGCONT` 自动挂起（`IDLE_SLEEP_SECONDS`，默认 30s），进程异常自愈 |
 | **媒体与剪贴板** | 支持从 BBP 上传图片/文件至服务端剪贴板；一键将服务端 X11 剪贴板内容拉取回手机端 |
 | **VPS 中继** *(可选)* | 加固型 L4 中继，配备 TLS 首包防护盾（`0x16 0x03` 过滤）与 IP 频率限制，保护 NAS 私网安全 |
 

@@ -18,3 +18,4 @@ enable_term_bar = false
 lock_win_h = true
 jpeg_quality = 85
 icon_style = "slate"
+hidpi = true

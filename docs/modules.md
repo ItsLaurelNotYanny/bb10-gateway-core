@@ -1,5 +1,7 @@
 # Gateway Architecture & Module Internals
 
+[简体中文](modules_cn.md)
+
 This document provides in-depth technical details on the core architectural components of `bb10-gateway-core`.
 
 ---
@@ -42,6 +44,12 @@ Unattended container stability is guaranteed by pre-launch cleanup and active pr
 1. **Lock Cleanup**: Automatically removes stale X11 sockets (`/tmp/.X99-lock`, `/tmp/.X11-unix/X99`) and Chromium `Singleton*` locks caused by sudden container restarts.
 2. **RAM-Disk Shm**: Allocates `shm_size: 1gb` for `/dev/shm` to prevent Chromium IPC crashes under heavy DOM rendering.
 3. **Supervisor Loop**: Starts `Xvfb :99`, window manager (`openbox`), virtual input daemon (`xdotool`), and target runtime. A background loop checks process health and auto-heals if the target application exits unexpectedly.
+4. **Headless GPU Guard (`--disable-gpu`)**:
+   - **Why**: Previously, launching Chromium with `--use-gl=angle --use-angle=gl-egl --ignore-gpu-blocklist` forced software ANGLE/SwiftShader GPU rasterization on headless NAS hosts without hardware GPUs, causing `chromium --type=gpu-process` to burn >150% CPU continuously on 2-core NAS devices and starve co-located containers.
+   - **Change**: `entrypoint.sh` now launches Chromium with `--disable-gpu` (`--use-gl=disabled`, `--disable-gpu-compositing`), preventing runaway software GPU spin.
+5. **In-Process Idle Auto-Sleep (`IdleSleepController` in `gateway.py`)**:
+   - **Why**: Even with `--disable-gpu`, idle Chromium web apps (such as Discord or X) continue background DOM/JS activity when no client is connected. Stopping the entire container via external orchestrators introduces cold-start latency and false "unexpected stop" alerts on NAS platforms.
+   - **Mechanism**: Controlled by `IDLE_SLEEP_SECONDS` (defaults to `30s` for `chromium` runtimes; `0` disables). When no unpaused WebSocket clients remain active for the timeout window, `gateway.py` sends `SIGSTOP` to `/usr/lib/chromium/chromium` processes, dropping idle CPU to near zero while keeping container state intact. The next authenticated `GET /` or `/ws` resume immediately sends `SIGCONT` for millisecond-level wake-up.
 
 ---
 

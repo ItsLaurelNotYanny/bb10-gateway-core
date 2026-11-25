@@ -24,6 +24,7 @@ from gateway import (
     encode_dirty_frame,
     is_allowed_key,
     resolve_chat_x,
+    resolve_idle_sleep_seconds,
     resolve_token,
     safe_filename,
     x11_paste_file,
@@ -82,7 +83,7 @@ def test_presets_defaults_and_overrides() -> None:
     dc_preset = load_preset(env={"PRESET": "discord", "PRESETS_DIR": TEST_PRESETS_DIR})
     assert dc_preset.name == "discord"
     assert dc_preset.port == 2443
-    assert dc_preset.win_w == 1064
+    assert dc_preset.win_w == 1023
     assert dc_preset.layout == "slim_rail"
 
     with pytest.raises(ValueError, match="Unknown preset"):
@@ -143,10 +144,12 @@ def test_encode_dirty_frame_and_chat_x() -> None:
     assert patch_pkt is not None
     assert struct.unpack(">BBHHHH", patch_pkt[:10]) == (FRAME_MAGIC, FLAG_PATCH, 30, 40, 20, 15)
 
+    from dataclasses import replace
+
     im = Image.new("RGB", (1064, 680), (30, 31, 34))
     ImageDraw.Draw(im).rectangle([340, 0, 1063, 679], fill=(49, 51, 56))
     assert detect_chat_x(im, default_x=375) == 340
-    assert resolve_chat_x(im, PRESETS["discord"]) == 340
+    assert resolve_chat_x(im, replace(PRESETS["discord"], hidpi=False)) == 340
     assert resolve_chat_x(im, PRESETS["term"]) == 0
 
 
@@ -305,3 +308,102 @@ def test_gateway_ws_clipboard_sync_and_icons() -> None:
             assert too_big.status == 413
 
     asyncio.run(run_scenario())
+
+
+def test_hidpi_scaling_behavior() -> None:
+    from client_html import render_client_html
+    from presets import load_preset, preset_scale
+
+    base = load_preset("term", {"PRESETS_DIR": "tests/presets.d"})
+    assert base.hidpi is False
+    assert preset_scale(base) == 1
+
+    scaled = load_preset("wechat", {"PRESETS_DIR": "tests/presets.d"})
+    assert scaled.hidpi is True
+    assert preset_scale(scaled) == 2
+
+    forced_off = load_preset("wechat", {"PRESETS_DIR": "tests/presets.d", "HIDPI": "0"})
+    assert forced_off.hidpi is False
+    assert preset_scale(forced_off) == 1
+
+    assert clamp_win_h(1440, default=1440, scale=2) == 1440
+    assert clamp_win_h(3000, default=1440, scale=2) == 2160
+    assert clamp_win_h(500, default=1440, scale=2) == 840
+
+    im_2x = Image.new("RGB", (2128, 1360), (30, 31, 34))
+    ImageDraw.Draw(im_2x).rectangle([680, 0, 2127, 1359], fill=(49, 51, 56))
+    assert detect_chat_x(im_2x, default_x=750, scale=2) == 680
+
+    html = render_client_html(scaled)
+    assert '"winW": 1440' in html
+    assert '"winH": 1440' in html
+    assert '"scale": 2' in html
+
+
+def test_idle_sleep_resolution() -> None:
+    assert resolve_idle_sleep_seconds(PRESETS["x"], {}) == 30.0
+    assert resolve_idle_sleep_seconds(PRESETS["term"], {}) == 0.0
+    assert resolve_idle_sleep_seconds(PRESETS["x"], {"IDLE_SLEEP_SECONDS": "0"}) == 0.0
+    assert resolve_idle_sleep_seconds(PRESETS["term"], {"IDLE_SLEEP_SECONDS": "15"}) == 15.0
+    assert resolve_idle_sleep_seconds(PRESETS["x"], {"IDLE_SLEEP_SECONDS": "bad"}) == 30.0
+
+
+def test_idle_sleep_and_wake_lifecycle() -> None:
+    async def _run() -> None:
+        events: list[str] = []
+
+        async def fake_capture(win_w: int, win_h: int) -> Image.Image:
+            return Image.new("RGB", (win_w, win_h), (0, 0, 0))
+
+        async def fake_suspend() -> None:
+            events.append("suspend")
+
+        async def fake_resume() -> None:
+            events.append("resume")
+
+        app = create_app(
+            preset=PRESETS["x"],
+            token="idle-secret-123",
+            capture_fn=fake_capture,
+            frame_interval=0.05,
+            idle_sleep_seconds=0.08,
+            suspend_fn=fake_suspend,
+            resume_fn=fake_resume,
+        )
+
+        async with TestClient(TestServer(app)) as client:
+            # 1. No clients on startup -> suspends after idle timeout
+            await asyncio.sleep(0.14)
+            assert events == ["suspend"]
+            assert app["idle_ctrl"].sleeping is True
+
+            # 2. Authenticated GET / wakes the app before /ws connects
+            resp = await client.get("/?t=idle-secret-123")
+            assert resp.status == 200
+            assert events == ["suspend", "resume"]
+            assert app["idle_ctrl"].sleeping is False
+
+            # 3. Active WS keeps app awake past the idle timeout
+            async with client.ws_connect("/ws") as ws:
+                await ws.receive_json(timeout=2.0)
+                await asyncio.sleep(0.12)
+                assert events == ["suspend", "resume"]
+
+                # 4. Pausing the only client suspends after idle timeout
+                await ws.send_json({"type": "pause", "paused": True})
+                await asyncio.sleep(0.14)
+                assert events == ["suspend", "resume", "suspend"]
+
+                # 5. Unpausing resumes immediately
+                await ws.send_json({"type": "pause", "paused": False})
+                await asyncio.sleep(0.04)
+                assert events == ["suspend", "resume", "suspend", "resume"]
+
+            # 6. Disconnecting WS suspends again after idle timeout
+            await asyncio.sleep(0.25)
+            assert events == ["suspend", "resume", "suspend", "resume", "suspend"]
+
+        # 7. Server shutdown while sleeping resumes processes cleanly
+        assert events == ["suspend", "resume", "suspend", "resume", "suspend", "resume"]
+
+    asyncio.run(_run())

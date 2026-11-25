@@ -4,21 +4,23 @@ from __future__ import annotations
 
 import json
 
-from presets import Preset
+from presets import Preset, preset_scale
 
 
 def render_client_html(preset: Preset) -> str:
     """Render self-contained ES5 gateway client page for the given preset."""
     has_term_bar = bool(preset.enable_term_bar)
+    scale = preset_scale(preset)
     cfg_json = json.dumps(
         {
             "preset": preset.name,
             "title": preset.title,
-            "winW": preset.win_w,
-            "winH": preset.win_h,
+            "winW": preset.win_w * scale,
+            "winH": preset.win_h * scale,
             "layout": preset.layout,
-            "railW": preset.rail_w,
-            "chatX": preset.default_chat_x,
+            "railW": preset.rail_w * scale,
+            "chatX": preset.default_chat_x * scale,
+            "scale": scale,
             "defaultTypeMode": preset.default_type_mode,
             "enableTermBar": has_term_bar,
         }
@@ -246,11 +248,13 @@ html, body {
   var CFG = """
         + cfg_json
         + """;
-  var winW = CFG.winW || 720;
-  var winH = CFG.winH || 720;
+  var scale = CFG.scale || 1;
+  var winW = CFG.winW || (720 * scale);
+  var winH = CFG.winH || (720 * scale);
   var layout = CFG.layout || 'direct';
   var railW = CFG.railW || 0;
   var chatX = CFG.chatX || 0;
+  var defaultSplitX = (CFG.chatX && CFG.chatX > railW) ? CFG.chatX : (375 * scale);
   var hasTermBar = !!CFG.enableTermBar;
   var viewMode = layout === 'slim_rail' ? 'slim' : 'direct';
 
@@ -354,9 +358,11 @@ html, body {
   }
 
   function clampH(h) {
-    var v = Math.round(h || 720);
-    if (v < 420) { return 420; }
-    if (v > 1080) { return 1080; }
+    var v = Math.round(h || (720 * scale));
+    var minH = 420 * scale;
+    var maxH = 1080 * scale;
+    if (v < minH) { return minH; }
+    if (v > maxH) { return maxH; }
     return v;
   }
 
@@ -372,7 +378,7 @@ html, body {
     if (sw <= 0) { sw = winW; }
     var activeSrcW = winW;
     if (layout === 'slim_rail') {
-      var splitX = chatX > railW ? chatX : 375;
+      var splitX = chatX > railW ? chatX : defaultSplitX;
       var rw = railW > 0 ? railW : 72;
       if (viewMode === 'drawer') {
         activeSrcW = splitX;
@@ -448,7 +454,7 @@ html, body {
       return;
     }
 
-    var splitX = chatX > railW ? chatX : 375;
+    var splitX = chatX > railW ? chatX : defaultSplitX;
     if (viewMode === 'drawer') {
       ctx.drawImage(buf, 0, 0, splitX, winH, 0, 0, cv.width, cv.height);
     } else if (viewMode === 'chat') {
@@ -488,7 +494,7 @@ html, body {
     if (layout !== 'slim_rail' || viewMode === 'direct' || viewMode === 'full') {
       rx = Math.round((lx * winW) / w);
     } else {
-      var splitX = chatX > railW ? chatX : 375;
+      var splitX = chatX > railW ? chatX : defaultSplitX;
       if (viewMode === 'drawer') {
         rx = Math.round((lx * splitX) / w);
       } else if (viewMode === 'chat') {
@@ -660,12 +666,22 @@ html, body {
         try {
           var meta = JSON.parse(ev.data);
           if (meta.type === 'meta') {
+            var needResize = false;
             if (meta.win_w) { winW = meta.win_w; }
             if (meta.win_h) { winH = meta.win_h; }
-            if (typeof meta.chat_x === 'number') { chatX = meta.chat_x; }
+            if (typeof meta.chat_x === 'number' && meta.chat_x !== chatX) {
+              chatX = meta.chat_x;
+              needResize = true;
+            }
             if (buf.width !== winW || buf.height !== winH) {
               buf.width = winW;
               buf.height = winH;
+            }
+            if (needResize && layout === 'slim_rail') {
+              var targetH = calcTargetWinH();
+              if (targetH !== winH) {
+                wsSend({ type: 'resize', win_h: targetH });
+              }
             }
             drawFrame();
           } else if (meta.type === 'clip_data') {

@@ -24,6 +24,7 @@ services:
       - WIN_H=${WIN_H:-}
       - JPEG_QUALITY=${JPEG_QUALITY:-}
       - ICON_STYLE=${ICON_STYLE:-}
+      - HIDPI=${HIDPI:-}
     volumes:
       - profile:${PROFILE_TARGET_PATH:-/data/profile}
       - ${CERTS_DIR:?set CERTS_DIR}:/certs:ro
