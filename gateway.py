@@ -818,6 +818,12 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     preset: Preset = request.app["preset"]
     token: str = request.app["token"]
     if not check_auth(request, token, preset.cookie_name):
+        LOG.warning(
+            "Rejected unauthenticated /ws from %s (cookie=%s, query_token=%s)",
+            request.remote,
+            preset.cookie_name in request.cookies,
+            bool(request.query.get("t")),
+        )
         raise web.HTTPUnauthorized(text="Unauthorized\n")
 
     ws = web.WebSocketResponse(heartbeat=25.0, max_msg_size=1024 * 1024)

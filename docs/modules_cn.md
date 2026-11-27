@@ -50,6 +50,9 @@
 5. **进程内空闲自动挂起 (`gateway.py` 中的 `IdleSleepController`)**：
    - **改动原因**：即便禁用 GPU，Discord/X 等网页应用在无人访问时仍会持续执行后台 JS/DOM 轮询消耗 CPU；而引入外部容器休眠编排器会带来冷启动延迟与 NAS 异常停止误报。
    - **实现机制**：由环境变量 `IDLE_SLEEP_SECONDS` 控制（`chromium` 运行时默认 `30s`，设为 `0` 可关闭）。当所有 WebSocket 客户端断开或锁屏暂停超过阈值后，`gateway.py` 向 `/usr/lib/chromium/chromium` 进程发送 `SIGSTOP` 冻结，使空闲 CPU 降至接近 0 且保留完整内存会话；下次收到已认证的 `GET /` 或 `/ws` 恢复请求时立即发送 `SIGCONT` 毫秒级唤醒。
+6. **终端网关宿主机 `tmux` 归属防护 (`deploy/compose.term.yml`)**：
+   - **改动原因**：终端网关通过挂载宿主机的 `/tmp/tmux-1000` 套接字目录，让容器内 `xterm` 仅作为宿主机真实 shell 的显示客户端。若容器早于宿主机 `tmux` 服务端启动（例如开发机重启或迁移切换脚本遗漏宿主机 `tmux` 启动步骤），容器内无条件执行 `tmux new-session -A` 会抢占 `/tmp/tmux-1000/default` 并在容器命名空间内拉起 `tmux` server，导致所有终端窗口落入容器环境（`appuser@<container-id>`）。
+   - **实现机制**：`deploy/compose.term.yml` 默认注入 `REQUIRE_HOST_TMUX=1` 并透传 `HOST_WORKSPACE`。启用 `REQUIRE_HOST_TMUX=1` 后，容器会话脚本仅通过 `tmux list-sessions`（不会拉起服务端）轮询等待宿主机 `tmux` server 就绪再 attach；宿主机侧通过开启 lingering 的 `systemd --user` 服务运行 `tmux -D`，保证开机自启且关闭最后一个窗口后服务端仍驻留宿主机。独立镜像冒烟测试不加载 `compose.term.yml`，仍默认 `REQUIRE_HOST_TMUX=0` 保持兼容。
 
 ---
 

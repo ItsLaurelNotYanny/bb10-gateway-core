@@ -291,6 +291,11 @@ html, body {
 
   var ws = null;
   var reconnTimer = null;
+  var connTimer = null;
+  var RECONN_MIN = 2000;
+  var RECONN_MAX = 30000;
+  var CONN_TIMEOUT = 8000;
+  var reconnDelay = RECONN_MIN;
   var barOpen = false;
   var pinned = false;
   var typeMode = !!CFG.defaultTypeMode;
@@ -618,24 +623,71 @@ html, body {
     processNextFrame();
   }
 
+  function isPageHidden() {
+    return !!(document.hidden || document.webkitHidden);
+  }
+
+  function clearReconnTimers() {
+    if (reconnTimer) {
+      clearTimeout(reconnTimer);
+      reconnTimer = null;
+    }
+    if (connTimer) {
+      clearTimeout(connTimer);
+      connTimer = null;
+    }
+  }
+
+  function hardReload() {
+    clearReconnTimers();
+    window.location.reload();
+  }
+
+  function scheduleReconnect() {
+    clearReconnTimers();
+    if (isPageHidden()) {
+      return;
+    }
+    var jitter = Math.floor(Math.random() * 500);
+    var waitMs = reconnDelay + jitter;
+    reconnDelay = reconnDelay * 2;
+    if (reconnDelay > RECONN_MAX) {
+      reconnDelay = RECONN_MAX;
+    }
+    reconnTimer = setTimeout(connectWs, waitMs);
+  }
+
   function updatePauseState(forceHidden) {
-    var hidden = forceHidden === true ? true : !!(document.hidden || document.webkitHidden);
+    var hidden = forceHidden === true ? true : isPageHidden();
     if (forceHidden === false) {
-      hidden = !!(document.hidden || document.webkitHidden);
+      hidden = isPageHidden();
+    }
+    if (!hidden && (!ws || ws.readyState > 1)) {
+      pausedState = false;
+      reconnDelay = RECONN_MIN;
+      connectWs();
+      return;
     }
     if (hidden !== pausedState) {
       pausedState = hidden;
       wsSend({ type: 'pause', paused: pausedState });
       if (ws && ws.readyState === 1) {
         setStatus(pausedState ? '#6b7280' : '#10b981', pausedState ? 'Sleep' : 'Live');
+      } else if (hidden) {
+        clearReconnTimers();
       }
     }
   }
 
   function connectWs() {
-    if (reconnTimer) {
-      clearTimeout(reconnTimer);
-      reconnTimer = null;
+    clearReconnTimers();
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      try { ws.close(); } catch (e) {}
+      ws = null;
     }
     var proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
     var hParam = calcTargetWinH();
@@ -644,16 +696,36 @@ html, body {
     var wsUrl = proto + window.location.host + '/ws' + q + sep + 'h=' + hParam;
 
     setStatus('#d97706', 'Conn');
+    var curWs = null;
     try {
-      ws = new WebSocket(wsUrl);
+      curWs = new WebSocket(wsUrl);
     } catch (e) {
-      reconnTimer = setTimeout(connectWs, 2000);
+      setStatus('#ef4444', 'Off');
+      scheduleReconnect();
       return;
     }
-    ws.binaryType = 'arraybuffer';
+    ws = curWs;
+    curWs.binaryType = 'arraybuffer';
 
-    ws.onopen = function () {
-      pausedState = !!(document.hidden || document.webkitHidden);
+    connTimer = setTimeout(function () {
+      connTimer = null;
+      if (ws === curWs && curWs.readyState === 0) {
+        curWs.onopen = null;
+        curWs.onmessage = null;
+        curWs.onclose = null;
+        curWs.onerror = null;
+        try { curWs.close(); } catch (e) {}
+        ws = null;
+        setStatus('#ef4444', 'Off');
+        scheduleReconnect();
+      }
+    }, CONN_TIMEOUT);
+
+    curWs.onopen = function () {
+      if (ws !== curWs) { return; }
+      clearReconnTimers();
+      reconnDelay = RECONN_MIN;
+      pausedState = isPageHidden();
       setStatus(pausedState ? '#6b7280' : '#10b981', pausedState ? 'Sleep' : 'Live');
       sendResize();
       if (pausedState) {
@@ -661,7 +733,8 @@ html, body {
       }
     };
 
-    ws.onmessage = function (ev) {
+    curWs.onmessage = function (ev) {
+      if (ws !== curWs) { return; }
       if (typeof ev.data === 'string') {
         try {
           var meta = JSON.parse(ev.data);
@@ -698,13 +771,17 @@ html, body {
       }
     };
 
-    ws.onclose = function () {
+    curWs.onclose = function () {
+      if (ws !== curWs) { return; }
+      clearReconnTimers();
+      ws = null;
       setStatus('#ef4444', 'Off');
-      reconnTimer = setTimeout(connectWs, 1800);
+      scheduleReconnect();
     };
 
-    ws.onerror = function () {
-      try { ws.close(); } catch (e) {}
+    curWs.onerror = function () {
+      if (ws !== curWs) { return; }
+      try { curWs.close(); } catch (e) {}
     };
   }
 
@@ -937,8 +1014,19 @@ html, body {
     wsSend({ type: 'wheel', x: Math.round(winW / 2), y: Math.round(winH / 2), dy: 260 });
   };
   document.getElementById('bRef').onclick = function () {
+    if (!ws || ws.readyState !== 1) {
+      hardReload();
+      return;
+    }
     wsSend({ type: 'refresh' });
   };
+  function onStatusTap() {
+    if (!ws || ws.readyState !== 1) {
+      hardReload();
+    }
+  }
+  dotEl.onclick = onStatusTap;
+  statEl.onclick = onStatusTap;
   document.getElementById('bInp').onclick = function () {
     if (barOpen) { closeBar(); } else { openBar(); }
   };

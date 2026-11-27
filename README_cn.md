@@ -111,7 +111,7 @@ base = "example"  # Inherits defaults from presets/example.toml
 
 ## 详细文档
 
-[核心模块内部实现](docs/modules_cn.md) · [VPS 中继配置](docs/relay_cn.md) · [TLS 与根证书指南](docs/tls_cn.md)
+[核心模块内部实现](docs/modules_cn.md) · [VPS 中继配置](docs/relay_cn.md) · [TLS 与根证书指南](docs/tls_cn.md) · [版本变更记录](CHANGELOG_cn.md)
 
 ## 开源协议
 

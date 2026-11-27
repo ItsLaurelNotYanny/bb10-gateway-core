@@ -111,7 +111,7 @@ base = "example"  # Inherits defaults from presets/example.toml
 
 ## Docs
 
-[Module internals](docs/modules.md) · [Relay setup](docs/relay.md) · [TLS / Root CA](docs/tls.md)
+[Module internals](docs/modules.md) · [Relay setup](docs/relay.md) · [TLS / Root CA](docs/tls.md) · [Changelog](CHANGELOG.md)
 
 ## License
 

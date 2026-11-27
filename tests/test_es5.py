@@ -47,6 +47,9 @@ def test_client_html_strict_es5_and_normalized_elements(preset_name: str) -> Non
     assert "visibilitychange" in html
     assert "webkitvisibilitychange" in html
     assert "clip_data" in html
+    assert "RECONN_MAX" in html
+    assert "CONN_TIMEOUT" in html
+    assert "window.location.reload()" in html
 
     if preset.enable_term_bar:
         assert '<div id="termBar">' in html

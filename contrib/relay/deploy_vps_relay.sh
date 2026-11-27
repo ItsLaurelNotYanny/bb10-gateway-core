@@ -78,16 +78,19 @@ for unit in "${UNITS[@]}"; do
     sudo systemctl restart "$unit"
 done
 
-# 7. Firewall Hardening (Option A: Selective Active Ports Only + Option C: Rate Limit)
+# 7. Firewall Hardening (Option A: Selective Active Ports Only + Option C: Token-Bucket Rate Limit)
 
-# Add per-IP connection rate limit on active gateway ports (max 45 new connections / 60s per IP)
-if ! sudo iptables -C INPUT -p tcp -m multiport --dports "$ACTIVE_PORTS" -m state --state NEW -m recent --name bb10_rate --update --seconds 60 --hitcount 45 -j DROP 2>/dev/null; then
-    sudo iptables -I INPUT 1 -p tcp -m multiport --dports "$ACTIVE_PORTS" -m state --state NEW -m recent --name bb10_rate --set 2>/dev/null || true
-    sudo iptables -I INPUT 2 -p tcp -m multiport --dports "$ACTIVE_PORTS" -m state --state NEW -m recent --name bb10_rate --update --seconds 60 --hitcount 45 -j DROP 2>/dev/null || true
+# Remove legacy xt_recent rules (double-counted --set/--update could self-lockout on reconnect)
+while sudo iptables -D INPUT -p tcp -m multiport --dports "$ACTIVE_PORTS" -m state --state NEW -m recent --name bb10_rate --set 2>/dev/null; do :; done
+while sudo iptables -D INPUT -p tcp -m multiport --dports "$ACTIVE_PORTS" -m state --state NEW -m recent --name bb10_rate --update --seconds 60 --hitcount 45 -j DROP 2>/dev/null; do :; done
+
+# Per-IP token-bucket limit (30/min sustained, burst 45; steady token refill avoids lockout)
+if ! sudo iptables -C INPUT -p tcp -m multiport --dports "$ACTIVE_PORTS" -m state --state NEW -m hashlimit --hashlimit-name bb10_rate --hashlimit-mode srcip --hashlimit-above 30/minute --hashlimit-burst 45 -j DROP 2>/dev/null; then
+    sudo iptables -I INPUT 1 -p tcp -m multiport --dports "$ACTIVE_PORTS" -m state --state NEW -m hashlimit --hashlimit-name bb10_rate --hashlimit-mode srcip --hashlimit-above 30/minute --hashlimit-burst 45 -j DROP
 fi
 
 if ! sudo iptables -C INPUT -p tcp -m multiport --dports "$ACTIVE_PORTS" -m state --state NEW -j ACCEPT 2>/dev/null; then
-    sudo iptables -I INPUT 3 -p tcp -m multiport --dports "$ACTIVE_PORTS" -m state --state NEW -j ACCEPT
+    sudo iptables -I INPUT 2 -p tcp -m multiport --dports "$ACTIVE_PORTS" -m state --state NEW -j ACCEPT
 fi
 
 if command -v netfilter-persistent >/dev/null 2>&1; then

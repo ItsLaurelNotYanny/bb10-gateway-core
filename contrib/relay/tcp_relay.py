@@ -78,7 +78,7 @@ class TcpRelay:
         connect_timeout: float = 10.0,
         idle_timeout: float = 1800.0,
         tls_guard: bool = False,
-        first_packet_timeout: float = 3.0,
+        first_packet_timeout: float = 10.0,
     ) -> None:
         self.target_host = target_host
         self.mappings: list[Any] = mappings or []

@@ -317,11 +317,63 @@ def test_compose_term_extension(tmp_path):
         text=True,
     ).stdout
     data = json.loads(out)
+    env = data["services"]["app"]["environment"]
+    assert env["HOST_WORKSPACE"] == str(tmp_path / "workspace")
+    assert env["REQUIRE_HOST_TMUX"] == "1"
     vols = data["services"]["app"]["volumes"]
     tmux_vol = next(v for v in vols if v.get("target") == "/tmp/tmux-1000")
     assert tmux_vol["source"] == str(tmp_path / "tmux")
     ws_vol = next(v for v in vols if v.get("target") == str(tmp_path / "workspace"))
     assert ws_vol["source"] == str(tmp_path / "workspace")
+
+
+def test_term_session_waits_for_host_tmux_when_required(tmp_path):
+    """When REQUIRE_HOST_TMUX=1, term_session.sh must never spawn a server before host is ready."""
+    term_script = ROOT / "private" / "extended" / "term" / "term_session.sh"
+    if not term_script.is_file():
+        pytest.skip("private extended term_session.sh not present")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ws_dir = tmp_path / "workspace"
+    ws_dir.mkdir()
+    log_file = tmp_path / "tmux.log"
+    count_file = tmp_path / "probe_count"
+    count_file.write_text("0")
+
+    mock_tmux = bin_dir / "tmux"
+    mock_tmux.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "$*" >> "{log_file}"\n'
+        'if [ "${1:-}" = "list-sessions" ]; then\n'
+        f'    n=$(cat "{count_file}")\n'
+        "    n=$((n + 1))\n"
+        f'    echo "$n" > "{count_file}"\n'
+        '    [ "$n" -ge 3 ] && exit 0 || exit 1\n'
+        "fi\n"
+        "exit 0\n"
+    )
+    mock_tmux.chmod(0o755)
+
+    env = {
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+        "REQUIRE_HOST_TMUX": "1",
+        "TMUX_WAIT_INTERVAL": "0.02",
+        "HOST_WORKSPACE": str(ws_dir),
+        "TMUX_SESSION": "bb10",
+    }
+    res = subprocess.run(
+        ["bash", str(term_script)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=5,
+    )
+    assert res.returncode == 0
+    assert "Waiting for host tmux server (REQUIRE_HOST_TMUX=1)" in res.stdout
+    calls = log_file.read_text().splitlines()
+    assert calls[:3] == ["list-sessions", "list-sessions", "list-sessions"]
+    assert calls[3] == f"-u new-session -A -s bb10 -c {ws_dir}"
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not available")

@@ -13,8 +13,8 @@ BlackBerry Passport (蜂窝网络)
       ▼
 公网 VPS (:2443..:2446)
       │
-      │ 1. 频率控制 (iptables: 单 IP 每 60 秒最多 45 次新建连接)
-      │ 2. TLS 首包防护盾: 深度检查首包前 2 字节 (0x16 0x03)
+      │ 1. 频率控制 (iptables hashlimit 令牌桶: 单 IP 持续 30/分钟，突发 45)
+      │ 2. TLS 首包防护盾: 检查首包前 3 字节 (0x16 0x03 0x00..0x04，10 秒首包窗口)
       │    非合规扫描连接直接切断，绝不向内网建立连接
       ▼
 Tailscale / WireGuard 虚拟内网
@@ -34,14 +34,13 @@ Tailscale / WireGuard 虚拟内网
 - 字节 1 必须等于 `0x03` (SSL 3.0 / TLS 1.x 协议版本)。
 若数据包首部不符合合规 TLS ClientHello，连接立即被丢弃，保护内网主机免遭无效打扰。
 
-### iptables 频率限制
-网关监听端口具备防爆破和防连接耗尽保护：
+### iptables 频率限制（`hashlimit` 令牌桶）
+网关监听端口采用按源 IP 的令牌桶防护（令牌按固定速率匀速恢复，既能防爆破与连接耗尽，又避免正常移动弱网重连时自锁）：
 ```bash
 ACTIVE_PORTS="2443,2444,2445,2446"
 sudo iptables -I INPUT 1 -p tcp -m multiport --dports "$ACTIVE_PORTS" \
-    -m state --state NEW -m recent --name bb10_rate --set
-sudo iptables -I INPUT 2 -p tcp -m multiport --dports "$ACTIVE_PORTS" \
-    -m state --state NEW -m recent --name bb10_rate --update --seconds 60 --hitcount 45 -j DROP
+    -m state --state NEW -m hashlimit --hashlimit-name bb10_rate \
+    --hashlimit-mode srcip --hashlimit-above 30/minute --hashlimit-burst 45 -j DROP
 ```
 
 ---

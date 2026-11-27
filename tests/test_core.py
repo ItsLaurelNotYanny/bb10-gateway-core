@@ -340,6 +340,19 @@ def test_hidpi_scaling_behavior() -> None:
     assert '"scale": 2' in html
 
 
+def test_ws_unauthenticated_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
+    async def _run() -> None:
+        app = create_app(preset=PRESETS["term"], token="secret-ws-tok", idle_sleep_seconds=0.0)
+        async with TestClient(TestServer(app)) as client:
+            with caplog.at_level("WARNING", logger="bb10_gateway"):
+                resp = await client.get("/ws")
+                assert resp.status == 401
+        assert any("Rejected unauthenticated /ws" in rec.message for rec in caplog.records)
+        assert not any("secret-ws-tok" in rec.message for rec in caplog.records)
+
+    asyncio.run(_run())
+
+
 def test_idle_sleep_resolution() -> None:
     assert resolve_idle_sleep_seconds(PRESETS["x"], {}) == 30.0
     assert resolve_idle_sleep_seconds(PRESETS["term"], {}) == 0.0

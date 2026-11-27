@@ -142,3 +142,6 @@ sys.exit(p.returncode)
         check=True,
     )
     assert f"SERVICES={services}" in res.stdout
+    deploy_src = (repo_root / "contrib/relay/deploy_vps_relay.sh").read_text(encoding="utf-8")
+    assert "hashlimit" in deploy_src
+    assert TcpRelay().first_packet_timeout == 10.0

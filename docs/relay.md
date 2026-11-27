@@ -13,8 +13,8 @@ BlackBerry Passport (Cellular)
       ▼
 Public VPS (:2443..:2446)
       │
-      │ 1. Rate-limit check (iptables: max 45 new connections / 60s per IP)
-      │ 2. TLS First-Packet Shield: inspects first 2 bytes (0x16 0x03)
+      │ 1. Rate-limit check (iptables hashlimit: 30/min sustained, burst 45 per IP)
+      │ 2. TLS First-Packet Shield: inspects first 3 bytes (0x16 0x03 0x00..0x04, 10s window)
       │    Non-TLS scanners dropped immediately without opening upstream hop
       ▼
 Tailscale / WireGuard Mesh VPN
@@ -34,14 +34,13 @@ The relay inspects the initial socket buffer:
 - Byte 1 must equal `0x03` (`SSL 3.0 / TLS 1.x` protocol version).
 If the payload does not start with a valid TLS ClientHello, the connection is instantly closed without opening an upstream socket to the private network.
 
-### Rate Limiting via `iptables`
-Active gateway ports are protected against brute-force and connection-exhaustion attacks:
+### Rate Limiting via `iptables` (`hashlimit` Token Bucket)
+Active gateway ports are protected against brute-force and connection-exhaustion attacks using a per-IP token bucket (steady refill prevents lockout during legitimate mobile reconnects):
 ```bash
 ACTIVE_PORTS="2443,2444,2445,2446"
 sudo iptables -I INPUT 1 -p tcp -m multiport --dports "$ACTIVE_PORTS" \
-    -m state --state NEW -m recent --name bb10_rate --set
-sudo iptables -I INPUT 2 -p tcp -m multiport --dports "$ACTIVE_PORTS" \
-    -m state --state NEW -m recent --name bb10_rate --update --seconds 60 --hitcount 45 -j DROP
+    -m state --state NEW -m hashlimit --hashlimit-name bb10_rate \
+    --hashlimit-mode srcip --hashlimit-above 30/minute --hashlimit-burst 45 -j DROP
 ```
 
 ---
